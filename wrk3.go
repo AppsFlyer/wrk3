@@ -30,7 +30,7 @@ func Benchmark(target RequestFunc) {
 	flag.BoolVar(&includeCo, "co", false, "print coordinated omission latency distribution")
 	flag.Parse()
 
-	fmt.Printf("running benchmak for %v...\n", duration)
+	fmt.Printf("running benchmark for %v...\n", duration)
 	result := benchmark(concurrency, throughput, duration, target)
 	printBenchResult(throughput, duration, result, includeCo)
 }
@@ -97,11 +97,11 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 
 	var omitted int64 = 0
 	eventsBuf := make(chan time.Time, 10000)
-	done := make(chan struct{})
+	doneCh := make(chan struct{})
 	go func() {
 		var _omitted int64 = 0
-		var _done = false
-		for !_done {
+		var done = false
+		for !done {
 			select {
 			case t := <-ticker.C:
 				select {
@@ -109,8 +109,8 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 				default:
 					_omitted += 1
 				}
-			case <-done:
-				_done = true
+			case <-doneCh:
+				done = true
 			}
 		}
 
@@ -152,7 +152,7 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 
 	time.Sleep(duration)
 	ticker.Stop()
-	done <- struct{}{}
+	close(doneCh)
 
 	counter := 0
 	errors := 0
