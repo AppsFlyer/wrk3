@@ -27,7 +27,7 @@ func Benchmark(target RequestFunc) {
 	flag.IntVar(&concurrency, "concurrency", 10, "level of benchmark concurrency")
 	flag.IntVar(&throughput, "throughput", 10000, "target benchmark throughput")
 	flag.DurationVar(&duration, "duration", 20*time.Second, "benchmark time period")
-	flag.BoolVar(&includeCo, "co", false, "print coordinated omission latency distribution")
+	flag.BoolVar(&includeCo, "co", true, "print coordinated omission latency distribution")
 	flag.Parse()
 
 	fmt.Printf("running benchmark for %v...\n", duration)
@@ -57,7 +57,7 @@ func printHistogram(hist *hdrhistogram.Histogram) {
 	fmt.Println("------------+-----------+-------------")
 
 	for _, q := range brackets {
-		fmt.Printf("%-08.3f    | %-09d | %-06d\n", q.Quantile, q.Count, q.ValueAt)
+		fmt.Printf("%-08.3f    | %-09d | %v\n", q.Quantile, q.Count, time.Duration(q.ValueAt))
 	}
 }
 
@@ -92,7 +92,9 @@ type BenchResult struct {
 }
 
 func benchmark(concurrency int, throughput int, duration time.Duration, sendRequest RequestFunc) BenchResult {
-	tickerInterval := time.Microsecond * time.Duration(1000000/throughput)
+	// Asy???
+	//tickerInterval := time.Microsecond * time.Duration(1000000/throughput)
+	tickerInterval := time.Second / time.Duration(throughput)
 	ticker := time.NewTicker(tickerInterval)
 
 	var omitted int64 = 0
@@ -125,8 +127,8 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 			res := localResult{
 				errors:      0,
 				counter:     0,
-				histogram:   hdrhistogram.New(0, 5000000, 3),
-				coHistogram: hdrhistogram.New(0, 5000000, 3),
+				histogram:   createHistogram(),
+				coHistogram: createHistogram(),
 			}
 
 			for t := range eventsBuf {
@@ -137,11 +139,11 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 					res.errors += 1
 				}
 
-				if err = res.coHistogram.RecordValue(time.Since(start).Microseconds()); err != nil {
+				if err = res.coHistogram.RecordValue(int64(time.Since(t))); err != nil {
 					log.Println("error reporting to hdr", err)
 				}
 
-				if err = res.histogram.RecordValue(time.Since(t).Microseconds()); err != nil {
+				if err = res.histogram.RecordValue(int64(time.Since(start))); err != nil {
 					log.Println("error reporting to hdr", err)
 				}
 			}
@@ -156,8 +158,8 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 
 	counter := 0
 	errors := 0
-	histogram := hdrhistogram.New(0, 5000000, 3)
-	coHistogram := hdrhistogram.New(0, 5000000, 3)
+	histogram := createHistogram()
+	coHistogram := createHistogram()
 
 	for i := 0; i < concurrency; i++ {
 		localRes := <-results
@@ -179,4 +181,8 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 		totalTime:   totalTime,
 	}
 
+}
+
+func createHistogram() *hdrhistogram.Histogram {
+	return hdrhistogram.New(0, int64(time.Minute), 3)
 }
