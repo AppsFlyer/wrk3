@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"github.com/codahale/hdrhistogram"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/codahale/hdrhistogram"
+	"golang.org/x/time/rate"
 )
 
 func main() {
@@ -92,27 +95,18 @@ type BenchResult struct {
 }
 
 func benchmark(concurrency int, throughput int, duration time.Duration, sendRequest RequestFunc) BenchResult {
-	// Asy???
-	//tickerInterval := time.Microsecond * time.Duration(1000000/throughput)
-	tickerInterval := time.Second / time.Duration(throughput)
-	ticker := time.NewTicker(tickerInterval)
+	rateLimiter := rate.NewLimiter(rate.Limit(throughput), concurrency)
 
 	var omitted int64 = 0
 	eventsBuf := make(chan time.Time, 10000)
-	doneCh := make(chan struct{})
+	doneCtx, cancel := context.WithTimeout(context.Background(), duration)
 	go func() {
 		var _omitted int64 = 0
-		var done = false
-		for !done {
+		for err := rateLimiter.Wait(doneCtx); err == nil; err = rateLimiter.Wait(doneCtx) {
 			select {
-			case t := <-ticker.C:
-				select {
-				case eventsBuf <- t:
-				default:
-					_omitted += 1
-				}
-			case <-doneCh:
-				done = true
+			case eventsBuf <- time.Now():
+			default:
+				_omitted += 1
 			}
 		}
 
@@ -131,20 +125,26 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 				coHistogram: createHistogram(),
 			}
 
-			for t := range eventsBuf {
-				res.counter += 1
-				start := time.Now()
-				err := sendRequest()
-				if err != nil {
-					res.errors += 1
-				}
+			done := false
+			for !done {
+				select {
+				case <-doneCtx.Done():
+					done = true
+				case t := <-eventsBuf:
+					res.counter += 1
+					start := time.Now()
+					err := sendRequest()
+					if err != nil {
+						res.errors += 1
+					}
 
-				if err = res.coHistogram.RecordValue(int64(time.Since(t))); err != nil {
-					log.Println("error reporting to hdr", err)
-				}
+					if err = res.coHistogram.RecordValue(int64(time.Since(t))); err != nil {
+						log.Println("error reporting to hdr", err)
+					}
 
-				if err = res.histogram.RecordValue(int64(time.Since(start))); err != nil {
-					log.Println("error reporting to hdr", err)
+					if err = res.histogram.RecordValue(int64(time.Since(start))); err != nil {
+						log.Println("error reporting to hdr", err)
+					}
 				}
 			}
 
@@ -152,9 +152,8 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 		}()
 	}
 
-	time.Sleep(duration)
-	ticker.Stop()
-	close(doneCh)
+	<-doneCtx.Done()
+	cancel()
 
 	counter := 0
 	errors := 0
