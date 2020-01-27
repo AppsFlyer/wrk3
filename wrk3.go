@@ -130,7 +130,11 @@ func benchmark(concurrency int, throughput int, duration time.Duration, sendRequ
 				select {
 				case <-doneCtx.Done():
 					done = true
-				case t := <-eventsBuf:
+				case t, ok := <-eventsBuf:
+					if !ok {
+						done = true
+						break
+					}
 					res.counter += 1
 					start := time.Now()
 					err := sendRequest()
