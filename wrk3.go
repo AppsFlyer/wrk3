@@ -1,22 +1,15 @@
-package main
+package wrk3
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/codahale/hdrhistogram"
 	"golang.org/x/time/rate"
 )
-
-func main() {
-	Benchmark(sendHttpRequest)
-}
 
 type RequestFunc func() error
 
@@ -31,22 +24,22 @@ func Benchmark(target RequestFunc) {
 	flag.Parse()
 
 	fmt.Printf("running benchmark for %v...\n", duration)
-	result := benchmark(concurrency, throughput, duration, target)
-	printBenchResult(throughput, duration, result)
+	result := RunBenchmark(concurrency, throughput, duration, target)
+	PrintBenchResult(throughput, duration, result)
 }
 
-func printBenchResult(throughput int, duration time.Duration, result BenchResult) {
+func PrintBenchResult(throughput int, duration time.Duration, result BenchResult) {
 	fmt.Println("benchmark results:")
-	fmt.Println("total duration: ", result.totalTime, "(target duration:", duration, ")")
-	fmt.Println("total requests: ", result.counter)
-	fmt.Println("errors: ", result.errors)
-	fmt.Println("omitted requests: ", result.omitted)
-	fmt.Println("throughput: ", result.throughput, "(target throughput:", throughput, ")")
+	fmt.Println("total duration: ", result.TotalTime, "(target duration:", duration, ")")
+	fmt.Println("total requests: ", result.Counter)
+	fmt.Println("errors: ", result.Errors)
+	fmt.Println("omitted requests: ", result.Omitted)
+	fmt.Println("throughput: ", result.Throughput, "(target throughput:", throughput, ")")
 	fmt.Println("latency distribution:")
-	printHistogram(result.latency)
+	PrintHistogram(result.Latency)
 }
 
-func printHistogram(hist *hdrhistogram.Histogram) {
+func PrintHistogram(hist *hdrhistogram.Histogram) {
 	brackets := hist.CumulativeDistribution()
 
 	fmt.Println("Quantile    | Count     | Value ")
@@ -57,19 +50,6 @@ func printHistogram(hist *hdrhistogram.Histogram) {
 	}
 }
 
-func sendHttpRequest() error {
-	resp, err := http.Get("http://localhost:8080/")
-	if resp != nil {
-		_, _ = io.Copy(ioutil.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}
-
-	if err != nil {
-		fmt.Println("error sending get request:", err)
-	}
-	return err
-}
-
 type localResult struct {
 	errors  int
 	counter int
@@ -77,15 +57,15 @@ type localResult struct {
 }
 
 type BenchResult struct {
-	throughput float64
-	counter    int
-	errors     int
-	omitted    int
-	latency    *hdrhistogram.Histogram
-	totalTime  time.Duration
+	Throughput float64
+	Counter    int
+	Errors     int
+	Omitted    int
+	Latency    *hdrhistogram.Histogram
+	TotalTime  time.Duration
 }
 
-func benchmark(concurrency int, throughput int, duration time.Duration, sendRequest RequestFunc) BenchResult {
+func RunBenchmark(concurrency int, throughput int, duration time.Duration, sendRequest RequestFunc) BenchResult {
 	eventsBuf := make(chan time.Time, 10000)
 	omittedChan := make(chan int, 1)
 	doneCtx, cancel := context.WithTimeout(context.Background(), duration)
@@ -166,12 +146,12 @@ func summarizeResults(concurrency int, results <-chan localResult, start time.Ti
 	totalTime := time.Since(start)
 
 	return BenchResult{
-		throughput: float64(counter) / totalTime.Seconds(),
-		counter:    counter,
-		errors:     errors,
-		omitted:    <-omittedChan,
-		latency:    latency,
-		totalTime:  totalTime,
+		Throughput: float64(counter) / totalTime.Seconds(),
+		Counter:    counter,
+		Errors:     errors,
+		Omitted:    <-omittedChan,
+		Latency:    latency,
+		TotalTime:  totalTime,
 	}
 }
 
