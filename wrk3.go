@@ -70,7 +70,7 @@ func RunBenchmark(concurrency int, throughput int, duration time.Duration, sendR
 	omittedChan := make(chan int, 1)
 	doneCtx, cancel := context.WithTimeout(context.Background(), duration)
 
-	go generateEvents(throughput, concurrency, doneCtx, eventsBuf, omittedChan)
+	go generateEvents(doneCtx, throughput, concurrency, eventsBuf, omittedChan)
 
 	results := make(chan localResult, concurrency)
 	start := time.Now()
@@ -84,7 +84,7 @@ func RunBenchmark(concurrency int, throughput int, duration time.Duration, sendR
 	return summarizeResults(concurrency, results, start, omittedChan)
 }
 
-func generateEvents(throughput int, concurrency int, doneCtx context.Context, eventsBuf chan time.Time, omittedChan chan int) {
+func generateEvents(doneCtx context.Context, throughput int, concurrency int, eventsBuf chan time.Time, omittedChan chan int) {
 	omitted := 0
 	rateLimiter := rate.NewLimiter(rate.Limit(throughput), 2*concurrency)
 	for err := rateLimiter.Wait(doneCtx); err == nil; err = rateLimiter.Wait(doneCtx) {
