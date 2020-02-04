@@ -16,7 +16,7 @@ import (
 func TestBasicHttpBench(t *testing.T) {
 	fmt.Println("regular test...")
 
-	server := createHttpServer(":8080")
+	server := createHTTPServer(":8080")
 	benchResult := wrk3.RunBenchmark(10, 1000,
 		10*time.Second, createHTTPLoadFunction("http://localhost:8080/", 100*time.Millisecond))
 
@@ -39,7 +39,7 @@ func TestBasicHttpBench(t *testing.T) {
 }
 
 func TestSlowHttpBench(t *testing.T) {
-	server := createSlowHttpServer(":8081")
+	server := createSlowHTTPServer(":8081")
 	fmt.Println("slow test...")
 
 	benchResult := wrk3.RunBenchmark(10, 1000,
@@ -83,7 +83,7 @@ func createHTTPLoadFunction(url string, timeout time.Duration) func() error {
 	}
 }
 
-func createHttpServer(addr string) *http.Server {
+func createHTTPServer(addr string) *http.Server {
 	server := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)))
 		w.WriteHeader(http.StatusOK)
@@ -99,7 +99,7 @@ func createHttpServer(addr string) *http.Server {
 	return server
 }
 
-func createSlowHttpServer(addr string) *http.Server {
+func createSlowHTTPServer(addr string) *http.Server {
 	workerCh := make(chan chan bool)
 	ticker := time.NewTicker(5 * time.Millisecond)
 	go func() {
