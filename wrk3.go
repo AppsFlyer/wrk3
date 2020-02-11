@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/codahale/hdrhistogram"
@@ -13,47 +14,11 @@ import (
 
 type RequestFunc func() error
 
-func Benchmark(target RequestFunc) {
-	var concurrency int
-	var throughput int
-	var duration time.Duration
-
-	flag.IntVar(&concurrency, "concurrency", 10, "level of benchmark concurrency")
-	flag.IntVar(&throughput, "throughput", 10000, "target benchmark throughput")
-	flag.DurationVar(&duration, "duration", 20*time.Second, "benchmark time period")
-	flag.Parse()
-
-	fmt.Printf("running benchmark for %v...\n", duration)
-	result := RunBenchmark(concurrency, throughput, duration, target)
-	PrintBenchResult(throughput, duration, result)
-}
-
-func PrintBenchResult(throughput int, duration time.Duration, result BenchResult) {
-	fmt.Println("benchmark results:")
-	fmt.Println("total duration: ", result.TotalTime, "(target duration:", duration, ")")
-	fmt.Println("total requests: ", result.Counter)
-	fmt.Println("errors: ", result.Errors)
-	fmt.Println("omitted requests: ", result.Omitted)
-	fmt.Println("throughput: ", result.Throughput, "(target throughput:", throughput, ")")
-	fmt.Println("latency distribution:")
-	PrintHistogram(result.Latency)
-}
-
-func PrintHistogram(hist *hdrhistogram.Histogram) {
-	brackets := hist.CumulativeDistribution()
-
-	fmt.Println("Quantile    | Count     | Value ")
-	fmt.Println("------------+-----------+-------------")
-
-	for _, q := range brackets {
-		fmt.Printf("%-08.3f    | %-09d | %v\n", q.Quantile, q.Count, time.Duration(q.ValueAt))
-	}
-}
-
-type localResult struct {
-	errors  int
-	counter int
-	latency *hdrhistogram.Histogram
+type Benchmark struct {
+	Concurrency int
+	Throughput  float64
+	Duration    time.Duration
+	SendRequest RequestFunc
 }
 
 type BenchResult struct {
@@ -65,41 +30,112 @@ type BenchResult struct {
 	TotalTime  time.Duration
 }
 
-func RunBenchmark(concurrency int, throughput int, duration time.Duration, sendRequest RequestFunc) BenchResult {
-	eventsBuf := make(chan time.Time, 10000)
-	omittedChan := make(chan int, 1)
+// BenchmarkCmd is a main function helper that runs the provided target function using the commandline arguments
+func BenchmarkCmd(target RequestFunc) {
+	var concurrency int
+	var throughput float64
+	var duration time.Duration
+
+	flag.IntVar(&concurrency, "concurrency", 10, "level of benchmark concurrency")
+	flag.Float64Var(&throughput, "throughput", 10000, "target benchmark throughput")
+	flag.DurationVar(&duration, "duration", 20*time.Second, "benchmark time period")
+	flag.Parse()
+
+	fmt.Printf("running benchmark for %v...\n", duration)
+	b := Benchmark{
+		Concurrency: concurrency,
+		Throughput:  throughput,
+		Duration:    duration,
+		SendRequest: target,
+	}
+	result := b.Run()
+	PrintBenchResult(throughput, duration, result)
+}
+
+type localResult struct {
+	errors  int
+	counter int
+	latency *hdrhistogram.Histogram
+}
+
+type executioner struct {
+	eventsGenerator
+	benchmark Benchmark
+	results   chan localResult
+	startTime time.Time
+}
+
+type eventsGenerator struct {
+	lock      sync.Mutex
+	eventsBuf chan time.Time
+	doneCtx   context.Context
+	cancel    context.CancelFunc
+	// omitted value is valid only after the execution is done
+	omitted int
+}
+
+func (b Benchmark) Run() BenchResult {
+	execution := b.newExecution()
+	execution.generateEvents(b.Throughput, 2*b.Concurrency)
+	for i := 0; i < b.Concurrency; i++ {
+		go execution.sendRequests()
+	}
+
+	execution.awaitDone()
+
+	return execution.summarizeResults()
+}
+
+func (b Benchmark) newExecution() *executioner {
+	return &executioner{
+		eventsGenerator: newEventsGenerator(b.Duration, int(b.Throughput*10) /*10 sec buffer*/),
+		benchmark:       b,
+		results:         make(chan localResult, b.Concurrency),
+		startTime:       time.Now(),
+	}
+}
+
+func newEventsGenerator(duration time.Duration, bufSize int) eventsGenerator {
 	doneCtx, cancel := context.WithTimeout(context.Background(), duration)
-
-	go generateEvents(doneCtx, throughput, concurrency, eventsBuf, omittedChan)
-
-	results := make(chan localResult, concurrency)
-	start := time.Now()
-	for i := 0; i < concurrency; i++ {
-		go sendRequests(doneCtx, sendRequest, eventsBuf, results)
+	return eventsGenerator{
+		lock:      sync.Mutex{},
+		doneCtx:   doneCtx,
+		cancel:    cancel,
+		eventsBuf: make(chan time.Time, bufSize),
 	}
-
-	<-doneCtx.Done()
-	cancel()
-
-	return summarizeResults(concurrency, results, start, omittedChan)
 }
 
-func generateEvents(doneCtx context.Context, throughput int, concurrency int, eventsBuf chan time.Time, omittedChan chan int) {
-	omitted := 0
-	rateLimiter := rate.NewLimiter(rate.Limit(throughput), 2*concurrency)
-	for err := rateLimiter.Wait(doneCtx); err == nil; err = rateLimiter.Wait(doneCtx) {
-		select {
-		case eventsBuf <- time.Now():
-		default:
-			omitted++
+func (e *eventsGenerator) generateEvents(throughput float64, burstSize int) {
+	go func() {
+		omitted := 0
+		rateLimiter := rate.NewLimiter(rate.Limit(throughput), burstSize)
+		for err := rateLimiter.Wait(e.doneCtx); err == nil; err = rateLimiter.Wait(e.doneCtx) {
+			select {
+			case e.eventsBuf <- time.Now():
+			default:
+				omitted++
+			}
 		}
-	}
 
-	close(eventsBuf)
-	omittedChan <- omitted
+		close(e.eventsBuf)
+		e.lock.Lock()
+		e.omitted = omitted
+		e.lock.Unlock()
+	}()
 }
 
-func sendRequests(doneCtx context.Context, sendRequest RequestFunc, eventsBuf <-chan time.Time, results chan localResult) {
+func (e *eventsGenerator) omittedCount() int {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	return e.omitted
+}
+
+func (e *eventsGenerator) awaitDone() {
+	<-e.doneCtx.Done()
+	e.cancel()
+}
+
+func (e *executioner) sendRequests() {
 	res := localResult{
 		errors:  0,
 		counter: 0,
@@ -109,12 +145,12 @@ func sendRequests(doneCtx context.Context, sendRequest RequestFunc, eventsBuf <-
 	done := false
 	for !done {
 		select {
-		case <-doneCtx.Done():
+		case <-e.doneCtx.Done():
 			done = true
-		case t, ok := <-eventsBuf:
+		case t, ok := <-e.eventsBuf:
 			if ok {
 				res.counter++
-				err := sendRequest()
+				err := e.benchmark.SendRequest()
 				if err != nil {
 					res.errors++
 				}
@@ -128,28 +164,28 @@ func sendRequests(doneCtx context.Context, sendRequest RequestFunc, eventsBuf <-
 		}
 	}
 
-	results <- res
+	e.results <- res
 }
 
-func summarizeResults(concurrency int, results <-chan localResult, start time.Time, omittedChan chan int) BenchResult {
+func (e *executioner) summarizeResults() BenchResult {
 	counter := 0
 	errors := 0
 	latency := createHistogram()
 
-	for i := 0; i < concurrency; i++ {
-		localRes := <-results
+	for i := 0; i < e.benchmark.Concurrency; i++ {
+		localRes := <-e.results
 		counter += localRes.counter
 		errors += localRes.errors
 		latency.Merge(localRes.latency)
 	}
 
-	totalTime := time.Since(start)
+	totalTime := time.Since(e.startTime)
 
 	return BenchResult{
 		Throughput: float64(counter) / totalTime.Seconds(),
 		Counter:    counter,
 		Errors:     errors,
-		Omitted:    <-omittedChan,
+		Omitted:    e.omittedCount(),
 		Latency:    latency,
 		TotalTime:  totalTime,
 	}
@@ -157,4 +193,26 @@ func summarizeResults(concurrency int, results <-chan localResult, start time.Ti
 
 func createHistogram() *hdrhistogram.Histogram {
 	return hdrhistogram.New(0, int64(time.Minute), 3)
+}
+
+func PrintBenchResult(throughput float64, duration time.Duration, result BenchResult) {
+	fmt.Println("benchmark results:")
+	fmt.Println("total duration: ", result.TotalTime, "(target duration:", duration, ")")
+	fmt.Println("total requests: ", result.Counter)
+	fmt.Println("errors: ", result.Errors)
+	fmt.Println("omitted requests: ", result.Omitted)
+	fmt.Println("throughput: ", result.Throughput, "(target throughput:", throughput, ")")
+	fmt.Println("latency distribution:")
+	printHistogram(result.Latency)
+}
+
+func printHistogram(hist *hdrhistogram.Histogram) {
+	brackets := hist.CumulativeDistribution()
+
+	fmt.Println("Quantile    | Count     | Value ")
+	fmt.Println("------------+-----------+-------------")
+
+	for _, q := range brackets {
+		fmt.Printf("%-08.3f    | %-09d | %v\n", q.Quantile, q.Count, time.Duration(q.ValueAt))
+	}
 }
