@@ -26,7 +26,7 @@ func TestBasicHttpBench(t *testing.T) {
 		SendRequest: createHTTPLoadFunction("http://localhost:8080/", 100*time.Millisecond),
 	}.Run()
 
-	assert.Equal(t, expectedThroughput, benchResult.Throughput-math.Mod(benchResult.Throughput, 200), "Throughput")
+	assert.Equal(t, expectedThroughput/100, math.Round(benchResult.Throughput/100), "Throughput")
 	assert.Equal(t, expectedDuration, benchResult.TotalTime.Truncate(time.Second), "bench time")
 
 	distribution := benchResult.Latency.CumulativeDistribution()
@@ -170,7 +170,6 @@ func TestSummarizeResults(t *testing.T) {
 	assert.Equal(t, 0, result.Errors, "errors")
 	assert.Equal(t, expectedResults, result.Counter, "count")
 	assert.Equal(t, expectedResults, int(result.Latency.TotalCount()), "histogram counter")
-	assert.Equal(t, time.Millisecond*time.Duration(expectedResults), result.TotalTime.Truncate(100*time.Millisecond), "total time")
 	assert.Equal(t, expectedLatency, time.Duration(result.Latency.Min()).Truncate(time.Millisecond), "histogram min time")
 }
 
