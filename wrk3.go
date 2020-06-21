@@ -14,13 +14,21 @@ import (
 	"golang.org/x/time/rate"
 )
 
-func main() {
-	Benchmark(sendHttpRequest)
+type RequestHandler interface {
+	executeRequest(localIndex int) error
 }
 
-type RequestFunc func() error
+type RequestFunc func(int) error
 
-func Benchmark(target RequestFunc) {
+func (reqFunc RequestFunc) executeRequest(localIndex int) error {
+	return reqFunc(localIndex)
+}
+
+func main() {
+	Benchmark(RequestFunc(sendHttpRequest))
+}
+
+func Benchmark(target RequestHandler) {
 	var concurrency int
 	var throughput int
 	var duration time.Duration
@@ -57,7 +65,7 @@ func printHistogram(hist *hdrhistogram.Histogram) {
 	}
 }
 
-func sendHttpRequest() error {
+func sendHttpRequest(_ int) error {
 	resp, err := http.Get("http://localhost:8080/")
 	if resp != nil {
 		_, _ = io.Copy(ioutil.Discard, resp.Body)
@@ -85,7 +93,7 @@ type BenchResult struct {
 	totalTime  time.Duration
 }
 
-func benchmark(concurrency int, throughput int, duration time.Duration, sendRequest RequestFunc) BenchResult {
+func benchmark(concurrency int, throughput int, duration time.Duration, sendRequest RequestHandler) BenchResult {
 	eventsBuf := make(chan time.Time, 10000)
 	omittedChan := make(chan int, 1)
 	doneCtx, cancel := context.WithTimeout(context.Background(), duration)
@@ -119,7 +127,7 @@ func generateEvents(throughput int, concurrency int, doneCtx context.Context, ev
 	omittedChan <- omitted
 }
 
-func sendRequests(doneCtx context.Context, sendRequest RequestFunc, eventsBuf <-chan time.Time, results chan localResult) {
+func sendRequests(doneCtx context.Context, sendRequest RequestHandler, eventsBuf <-chan time.Time, results chan localResult) {
 	res := localResult{
 		errors:  0,
 		counter: 0,
@@ -134,7 +142,7 @@ func sendRequests(doneCtx context.Context, sendRequest RequestFunc, eventsBuf <-
 		case t, ok := <-eventsBuf:
 			if ok {
 				res.counter++
-				err := sendRequest()
+				err := sendRequest.executeRequest(res.counter)
 				if err != nil {
 					res.errors++
 				}
