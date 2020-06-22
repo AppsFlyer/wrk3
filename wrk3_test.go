@@ -44,7 +44,7 @@ func TestSlowHttpBench(t *testing.T) {
 		Concurrency: 10,
 		Throughput:  1000,
 		Duration:    expectedDuration,
-		SendRequest: createHTTPLoadFunction("http://localhost:8081/", 5*time.Second),
+		SendRequest: createHTTPLoadHandler("http://localhost:8081/", 5*time.Second),
 	}.Run()
 
 	assert.True(t, benchResult.Throughput < 500, "throughput too high for slow server. actual value %s", benchResult.Throughput)
@@ -56,7 +56,34 @@ func TestSlowHttpBench(t *testing.T) {
 	_ = server.Close()
 }
 
-func createHTTPLoadFunction(url string, timeout time.Duration) RequestHandler {
+type handler struct {
+	client *http.Client
+	url    string
+}
+
+func (h *handler) ExecuteRequest(_ int) error {
+	resp, err := h.client.Get(h.url)
+	if resp != nil {
+		_, _ = io.Copy(ioutil.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	return err
+}
+
+func createHTTPLoadHandler(url string, timeout time.Duration) RequestHandler {
+	return &handler{
+		url: url,
+		client: &http.Client{
+			Transport: &http.Transport{
+				MaxConnsPerHost: 200,
+			},
+			Timeout: timeout,
+		},
+	}
+}
+
+func createHTTPLoadFunction(url string, timeout time.Duration) RequestFunc {
 	client := &http.Client{
 		Transport: &http.Transport{
 			MaxConnsPerHost: 200,
@@ -64,7 +91,7 @@ func createHTTPLoadFunction(url string, timeout time.Duration) RequestHandler {
 		Timeout: timeout,
 	}
 
-	return RequestFunc(func(index int) error {
+	return func(index int) error {
 		resp, err := client.Get(url)
 		if resp != nil {
 			_, _ = io.Copy(ioutil.Discard, resp.Body)
@@ -72,7 +99,7 @@ func createHTTPLoadFunction(url string, timeout time.Duration) RequestHandler {
 		}
 
 		return err
-	})
+	}
 }
 
 func createHTTPServer(addr string) *http.Server {
