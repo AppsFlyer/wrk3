@@ -1,13 +1,10 @@
-package main
+package wrk3
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/codahale/hdrhistogram"
@@ -15,28 +12,37 @@ import (
 )
 
 type RequestHandler interface {
-	executeRequest(localIndex int) error
+	ExecuteRequest(localIndex int) error
 }
 
 type RequestFunc func(int) error
 
-func (reqFunc RequestFunc) executeRequest(localIndex int) error {
+func (reqFunc RequestFunc) ExecuteRequest(localIndex int) error {
 	return reqFunc(localIndex)
 }
 
-func main() {
-	Benchmark(RequestFunc(sendHttpRequest))
-}
+var flagsDefined = false
+var concurrency int
+var throughput int
+var duration time.Duration
 
-func Benchmark(target RequestHandler) {
-	var concurrency int
-	var throughput int
-	var duration time.Duration
-
+// call this before calling to flag.Parse()
+func DefineBenchmarkFlags() {
 	flag.IntVar(&concurrency, "concurrency", 10, "level of benchmark concurrency")
 	flag.IntVar(&throughput, "throughput", 10000, "target benchmark throughput")
 	flag.DurationVar(&duration, "duration", 20*time.Second, "benchmark time period")
-	flag.Parse()
+	flagsDefined = true
+}
+
+// main entry point for the benchmark.
+func Benchmark(target RequestHandler) {
+	if !flagsDefined {
+		DefineBenchmarkFlags()
+	}
+
+	if !flag.Parsed() {
+		flag.Parse()
+	}
 
 	fmt.Printf("running benchmark for %v...\n", duration)
 	result := benchmark(concurrency, throughput, duration, target)
@@ -63,19 +69,6 @@ func printHistogram(hist *hdrhistogram.Histogram) {
 	for _, q := range brackets {
 		fmt.Printf("%-08.3f    | %-09d | %v\n", q.Quantile, q.Count, time.Duration(q.ValueAt))
 	}
-}
-
-func sendHttpRequest(_ int) error {
-	resp, err := http.Get("http://localhost:8080/")
-	if resp != nil {
-		_, _ = io.Copy(ioutil.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}
-
-	if err != nil {
-		fmt.Println("error sending get request:", err)
-	}
-	return err
 }
 
 type localResult struct {
@@ -142,7 +135,7 @@ func sendRequests(doneCtx context.Context, sendRequest RequestHandler, eventsBuf
 		case t, ok := <-eventsBuf:
 			if ok {
 				res.counter++
-				err := sendRequest.executeRequest(res.counter)
+				err := sendRequest.ExecuteRequest(res.counter)
 				if err != nil {
 					res.errors++
 				}
