@@ -56,7 +56,7 @@ func TestSlowHttpBench(t *testing.T) {
 	_ = server.Close()
 }
 
-func createHTTPLoadFunction(url string, timeout time.Duration) func() error {
+func createHTTPLoadFunction(url string, timeout time.Duration) RequestHandler {
 	client := &http.Client{
 		Transport: &http.Transport{
 			MaxConnsPerHost: 200,
@@ -64,18 +64,15 @@ func createHTTPLoadFunction(url string, timeout time.Duration) func() error {
 		Timeout: timeout,
 	}
 
-	return func() error {
+	return RequestFunc(func(index int) error {
 		resp, err := client.Get(url)
 		if resp != nil {
 			_, _ = io.Copy(ioutil.Discard, resp.Body)
 			_ = resp.Body.Close()
 		}
 
-		if err != nil {
-			fmt.Println("error sending get request:", err)
-		}
 		return err
-	}
+	})
 }
 
 func createHTTPServer(addr string) *http.Server {
@@ -129,7 +126,7 @@ func TestEventsGenerator(t *testing.T) {
 	start := time.Now()
 	expectedDuration := 100 * time.Millisecond
 	generator := newEventsGenerator(expectedDuration, int(throughput*2))
-	generator.generateEvents(throughput, 10)
+	go generator.generateEvents(throughput, 10)
 	generator.awaitDone()
 	actualDuration := time.Since(start)
 
@@ -139,7 +136,7 @@ func TestEventsGenerator(t *testing.T) {
 
 func TestSendRequestsWithErrors(t *testing.T) {
 	expectedResults := 666
-	e := configureExecutioner(expectedResults, func() error { return fmt.Errorf("baaahhh") })
+	e := configureExecutioner(expectedResults, func(int) error { return fmt.Errorf("baaahhh") })
 	e.sendRequests()
 
 	result := <-e.results
@@ -149,7 +146,7 @@ func TestSendRequestsWithErrors(t *testing.T) {
 
 func TestSendRequests(t *testing.T) {
 	expectedResults := 666
-	e := configureExecutioner(expectedResults, func() error { return nil })
+	e := configureExecutioner(expectedResults, func(int) error { return nil })
 	e.sendRequests()
 
 	result := <-e.results
@@ -160,7 +157,7 @@ func TestSendRequests(t *testing.T) {
 func TestSummarizeResults(t *testing.T) {
 	expectedResults := 500
 	expectedLatency := time.Millisecond
-	e := configureExecutioner(expectedResults, func() error {
+	e := configureExecutioner(expectedResults, func(index int) error {
 		time.Sleep(expectedLatency)
 		return nil
 	})

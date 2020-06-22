@@ -24,15 +24,14 @@ func (reqFunc RequestFunc) ExecuteRequest(localIndex int) error {
 
 var flagsDefined = false
 var concurrency int
-var throughput int
+var throughput float64
 var duration time.Duration
-
 
 type Benchmark struct {
 	Concurrency int
 	Throughput  float64
 	Duration    time.Duration
-	SendRequest RequestFunc
+	SendRequest RequestHandler
 }
 
 type BenchResult struct {
@@ -46,13 +45,13 @@ type BenchResult struct {
 
 func DefineBenchmarkFlags() {
 	flag.IntVar(&concurrency, "concurrency", 10, "level of benchmark concurrency")
-	flag.IntVar(&throughput, "throughput", 10000, "target benchmark throughput")
+	flag.Float64Var(&throughput, "throughput", 10000, "target benchmark throughput")
 	flag.DurationVar(&duration, "duration", 20*time.Second, "benchmark time period")
 	flagsDefined = true
 }
 
 // BenchmarkCmd is a main function helper that runs the provided target function using the commandline arguments
-func BenchmarkCmd(target RequestFunc) {
+func BenchmarkCmd(target RequestHandler) {
 	if !flagsDefined {
 		DefineBenchmarkFlags()
 	}
@@ -96,13 +95,12 @@ type eventsGenerator struct {
 
 func (b Benchmark) Run() BenchResult {
 	execution := b.newExecution()
-	execution.generateEvents(b.Throughput, 2*b.Concurrency)
+	go execution.generateEvents(b.Throughput, 2*b.Concurrency)
 	for i := 0; i < b.Concurrency; i++ {
 		go execution.sendRequests()
 	}
 
 	execution.awaitDone()
-
 	return execution.summarizeResults()
 }
 
@@ -126,22 +124,20 @@ func newEventsGenerator(duration time.Duration, bufSize int) eventsGenerator {
 }
 
 func (e *eventsGenerator) generateEvents(throughput float64, burstSize int) {
-	go func() {
-		omitted := 0
-		rateLimiter := rate.NewLimiter(rate.Limit(throughput), burstSize)
-		for err := rateLimiter.Wait(e.doneCtx); err == nil; err = rateLimiter.Wait(e.doneCtx) {
-			select {
-			case e.eventsBuf <- time.Now():
-			default:
-				omitted++
-			}
+	omitted := 0
+	rateLimiter := rate.NewLimiter(rate.Limit(throughput), burstSize)
+	for err := rateLimiter.Wait(e.doneCtx); err == nil; err = rateLimiter.Wait(e.doneCtx) {
+		select {
+		case e.eventsBuf <- time.Now():
+		default:
+			omitted++
 		}
+	}
 
-		close(e.eventsBuf)
-		e.lock.Lock()
-		e.omitted = omitted
-		e.lock.Unlock()
-	}()
+	close(e.eventsBuf)
+	e.lock.Lock()
+	e.omitted = omitted
+	e.lock.Unlock()
 }
 
 func (e *eventsGenerator) omittedCount() int {
@@ -170,7 +166,7 @@ func (e *executioner) sendRequests() {
 		case t, ok := <-e.eventsBuf:
 			if ok {
 				res.counter++
-				err := e.benchmark.SendRequest()
+				err := e.benchmark.SendRequest.ExecuteRequest(res.counter)
 				if err != nil {
 					res.errors++
 				}

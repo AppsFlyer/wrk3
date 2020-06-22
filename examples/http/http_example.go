@@ -34,5 +34,5 @@ func sendHttpRequest(_ int) error {
 }
 
 func main() {
-	wrk3.Benchmark(wrk3.RequestFunc(sendHttpRequest))
+	wrk3.BenchmarkCmd(wrk3.RequestFunc(sendHttpRequest))
 }

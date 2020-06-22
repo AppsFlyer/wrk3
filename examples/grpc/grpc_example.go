@@ -50,7 +50,7 @@ func main() {
 		req:     request,
 	}
 
-	wrk3.Benchmark(b)
+	wrk3.BenchmarkCmd(b)
 }
 
 func buildClients(numConn int, host string, port int) []testpb.BenchmarkServiceClient {
