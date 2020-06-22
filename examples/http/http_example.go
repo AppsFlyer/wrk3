@@ -16,10 +16,9 @@ var client = &http.Client{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2: true,
-		MaxIdleConns:      100,
-		MaxConnsPerHost:   100,
-		IdleConnTimeout:   90 * time.Second,
+		MaxIdleConns:    100,
+		MaxConnsPerHost: 100,
+		IdleConnTimeout: 90 * time.Second,
 	},
 }
 
