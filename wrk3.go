@@ -13,10 +13,17 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// the interface to be implemented in order to supply specific load during the benchmark
+// each time the method ExecuteRequest is called by the framework it should create a logical single unit of work(the request)
+// the request can be a remote server call or any other type of load that needs to be benchmarked.
+// the method should return an error if one was created during the execution of the request or nil otherwise
+// the localIndex is an ever increasing index starting from zero, indicating the progress of a local batch of requests
 type RequestHandler interface {
 	ExecuteRequest(localIndex int) error
 }
 
+// alternatively, instead of providing an interface, one can provide a single function
+// with the same signature as the one in the RequestHandler. the function will be lifted to an interface.
 type RequestFunc func(int) error
 
 func (reqFunc RequestFunc) ExecuteRequest(localIndex int) error {
