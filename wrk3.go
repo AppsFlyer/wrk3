@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -22,11 +23,6 @@ func (reqFunc RequestFunc) ExecuteRequest(localIndex int) error {
 	return reqFunc(localIndex)
 }
 
-var flagsDefined = false
-var concurrency int
-var throughput float64
-var duration time.Duration
-
 type Benchmark struct {
 	Concurrency int
 	Throughput  float64
@@ -43,32 +39,28 @@ type BenchResult struct {
 	TotalTime  time.Duration
 }
 
-func DefineBenchmarkFlags() {
-	flag.IntVar(&concurrency, "concurrency", 10, "level of benchmark concurrency")
-	flag.Float64Var(&throughput, "throughput", 10000, "target benchmark throughput")
-	flag.DurationVar(&duration, "duration", 20*time.Second, "benchmark time period")
-	flagsDefined = true
-}
-
 // BenchmarkCmd is a main function helper that runs the provided target function using the commandline arguments
 func BenchmarkCmd(target RequestHandler) {
-	if !flagsDefined {
-		DefineBenchmarkFlags()
-	}
+	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 
-	if !flag.Parsed() {
-		flag.Parse()
+	var concurrency = cmd.Int("concurrency", 10, "level of benchmark concurrency")
+	var throughput = cmd.Float64("throughput", 10000, "target benchmark throughput")
+	var duration = cmd.Duration("duration", 20*time.Second, "benchmark time period")
+
+	err := cmd.Parse(os.Args[1:])
+	if err != nil {
+		log.Fatal("can't parse command line flags", err)
 	}
 
 	fmt.Printf("running benchmark for %v...\n", duration)
 	b := Benchmark{
-		Concurrency: concurrency,
-		Throughput:  throughput,
-		Duration:    duration,
+		Concurrency: *concurrency,
+		Throughput:  *throughput,
+		Duration:    *duration,
 		SendRequest: target,
 	}
 	result := b.Run()
-	PrintBenchResult(throughput, duration, result)
+	PrintBenchResult(*throughput, *duration, result)
 }
 
 type localResult struct {

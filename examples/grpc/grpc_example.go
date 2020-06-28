@@ -12,15 +12,6 @@ import (
 	testpb "google.golang.org/grpc/benchmark/grpc_testing"
 )
 
-var (
-	host = flag.String("host", "localhost", "host address/name to connect to.")
-	port = flag.Int("port", 50051, "host port to connect to.")
-
-	numConn = flag.Int("c", 1, "The number of parallel connections.")
-	rqSize  = flag.Int("req", 1, "Request message size in bytes.")
-	rspSize = flag.Int("resp", 1, "Response message size in bytes.")
-)
-
 type bench struct {
 	clients []testpb.BenchmarkServiceClient
 	req     *testpb.SimpleRequest
@@ -33,7 +24,13 @@ func (b *bench) ExecuteRequest(localIndex int) error {
 }
 
 func main() {
-	wrk3.DefineBenchmarkFlags()
+	var host = flag.String("host", "localhost", "host address/name to connect to.")
+	var port = flag.Int("port", 50051, "host port to connect to.")
+
+	var numConn = flag.Int("c", 1, "The number of parallel connections.")
+	var rqSize = flag.Int("req", 1, "Request message size in bytes.")
+	var rspSize = flag.Int("resp", 1, "Response message size in bytes.")
+
 	flag.Parse()
 
 	request := &testpb.SimpleRequest{
