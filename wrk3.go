@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -12,13 +13,28 @@ import (
 	"golang.org/x/time/rate"
 )
 
-type RequestFunc func() error
+// the interface to be implemented in order to supply specific load during the benchmark
+// each time the method ExecuteRequest is called by the framework it should create a logical single unit of work(the request)
+// the request can be a remote server call or any other type of load that needs to be benchmarked.
+// the method should return an error if one was created during the execution of the request or nil otherwise
+// the localIndex is an ever increasing index starting from zero, indicating the progress of a local batch of requests
+type RequestHandler interface {
+	ExecuteRequest(localIndex int) error
+}
+
+// alternatively, instead of providing an interface, one can provide a single function
+// with the same signature as the one in the RequestHandler. the function will be lifted to an interface.
+type RequestFunc func(int) error
+
+func (reqFunc RequestFunc) ExecuteRequest(localIndex int) error {
+	return reqFunc(localIndex)
+}
 
 type Benchmark struct {
 	Concurrency int
 	Throughput  float64
 	Duration    time.Duration
-	SendRequest RequestFunc
+	SendRequest RequestHandler
 }
 
 type BenchResult struct {
@@ -31,25 +47,27 @@ type BenchResult struct {
 }
 
 // BenchmarkCmd is a main function helper that runs the provided target function using the commandline arguments
-func BenchmarkCmd(target RequestFunc) {
-	var concurrency int
-	var throughput float64
-	var duration time.Duration
+func BenchmarkCmd(target RequestHandler) {
+	var cmd = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 
-	flag.IntVar(&concurrency, "concurrency", 10, "level of benchmark concurrency")
-	flag.Float64Var(&throughput, "throughput", 10000, "target benchmark throughput")
-	flag.DurationVar(&duration, "duration", 20*time.Second, "benchmark time period")
-	flag.Parse()
+	var concurrency = cmd.Int("concurrency", 10, "level of benchmark concurrency")
+	var throughput = cmd.Float64("throughput", 10000, "target benchmark throughput")
+	var duration = cmd.Duration("duration", 20*time.Second, "benchmark time period")
+
+	err := cmd.Parse(os.Args[1:])
+	if err != nil {
+		log.Fatal("can't parse command line flags", err)
+	}
 
 	fmt.Printf("running benchmark for %v...\n", duration)
 	b := Benchmark{
-		Concurrency: concurrency,
-		Throughput:  throughput,
-		Duration:    duration,
+		Concurrency: *concurrency,
+		Throughput:  *throughput,
+		Duration:    *duration,
 		SendRequest: target,
 	}
 	result := b.Run()
-	PrintBenchResult(throughput, duration, result)
+	PrintBenchResult(*throughput, *duration, result)
 }
 
 type localResult struct {
@@ -76,13 +94,12 @@ type eventsGenerator struct {
 
 func (b Benchmark) Run() BenchResult {
 	execution := b.newExecution()
-	execution.generateEvents(b.Throughput, 2*b.Concurrency)
+	go execution.generateEvents(b.Throughput, 2*b.Concurrency)
 	for i := 0; i < b.Concurrency; i++ {
 		go execution.sendRequests()
 	}
 
 	execution.awaitDone()
-
 	return execution.summarizeResults()
 }
 
@@ -106,22 +123,20 @@ func newEventsGenerator(duration time.Duration, bufSize int) eventsGenerator {
 }
 
 func (e *eventsGenerator) generateEvents(throughput float64, burstSize int) {
-	go func() {
-		omitted := 0
-		rateLimiter := rate.NewLimiter(rate.Limit(throughput), burstSize)
-		for err := rateLimiter.Wait(e.doneCtx); err == nil; err = rateLimiter.Wait(e.doneCtx) {
-			select {
-			case e.eventsBuf <- time.Now():
-			default:
-				omitted++
-			}
+	omitted := 0
+	rateLimiter := rate.NewLimiter(rate.Limit(throughput), burstSize)
+	for err := rateLimiter.Wait(e.doneCtx); err == nil; err = rateLimiter.Wait(e.doneCtx) {
+		select {
+		case e.eventsBuf <- time.Now():
+		default:
+			omitted++
 		}
+	}
 
-		close(e.eventsBuf)
-		e.lock.Lock()
-		e.omitted = omitted
-		e.lock.Unlock()
-	}()
+	close(e.eventsBuf)
+	e.lock.Lock()
+	e.omitted = omitted
+	e.lock.Unlock()
 }
 
 func (e *eventsGenerator) omittedCount() int {
@@ -150,7 +165,7 @@ func (e *executioner) sendRequests() {
 		case t, ok := <-e.eventsBuf:
 			if ok {
 				res.counter++
-				err := e.benchmark.SendRequest()
+				err := e.benchmark.SendRequest.ExecuteRequest(res.counter)
 				if err != nil {
 					res.errors++
 				}
