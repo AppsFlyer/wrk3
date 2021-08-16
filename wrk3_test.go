@@ -170,7 +170,8 @@ func TestSummarizeResults(t *testing.T) {
 	assert.Equal(t, 0, result.Errors, "errors")
 	assert.Equal(t, expectedResults, result.Counter, "count")
 	assert.Equal(t, expectedResults, int(result.Latency.TotalCount()), "histogram counter")
-	assert.Equal(t, expectedLatency, time.Duration(result.Latency.Min()).Truncate(time.Millisecond), "histogram min time")
+	assert.LessOrEqual(t, expectedLatency, time.Duration(result.Latency.Min()).Truncate(time.Millisecond), "histogram min time")
+	assert.GreaterOrEqual(t, expectedLatency*3, time.Duration(result.Latency.Min()), "histogram min time")
 }
 
 func configureExecutioner(eventCount int, requestFunc RequestFunc) *executioner {

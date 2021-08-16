@@ -16,4 +16,4 @@ script:
   - make
 #  - make testflags="-race"
   # submit to goveralls only on the latest version to avoid timeouts
-  - if [[ $TRAVIS_GO_VERSION == 1.13* ]]; then $GOPATH/bin/goveralls -service=travis-ci; fi
+  - if [[ $TRAVIS_GO_VERSION == 1.16* ]]; then $GOPATH/bin/goveralls -service=travis-ci; fi
